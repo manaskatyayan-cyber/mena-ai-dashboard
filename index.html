@@ -2698,7 +2698,7 @@ function caseIntent(q) {
     const st = funnelSteps(t); const rows = st.map((s, i) => [`${i + 1}. ${s.name}`, fN(s.count), i ? pct(s.count, st[i - 1].count, 1) : '-', i ? fN(st[i - 1].count - s.count) : '-']);
     return { title: 'Where the checkout funnel leaks', html: H('funnelDiagnoses') + scope, table: { cols: ['Step', 'Count', '% of previous', 'Lost'], rows }, chartCfg: { type: 'bar', labels: st.map(s => s.name), datasets: [{ label: 'Count', data: st.map(s => s.count) }], fmt: 'num', log: true }, followups: ['How much could guest checkout recover?', 'Where is conversion rate lowest?', 'What should we do next?'] };
   }
-  if (/ (track\w*|attribution|discrepanc\w*|mismatch|over ?report\w*|pixel|conversion (issue|problem|results?|data)|platform conversions?|google ads conversions?|q3) /.test(qn)) {
+  if (/ (track\w*|attribution|discrepanc\w*|mismatch|over ?report\w*|over ?count\w*|over ?claim\w*|inflat\w*|pixel|conversion (issue|problem|results?|data|numbers?|counts?)|platform conversions?|google ads conversions?|q3) /.test(qn) || (/ (lying|lie|lies|liar|fake|wrong|trust\w*|believe|honest|real|accurate|correct|exaggerat\w*|double count\w*) /.test(qn) && / (conversions?|platforms?|google( ads)?|meta|facebook|ads?|reported|reporting|numbers?) /.test(qn))) {
     const S = VIEW.searchTot, cS = VIEW.ch[VIEW.iSearch], B = (typeof BREAK !== 'undefined') ? BREAK : null;
     const po = cS ? cS.m.orders : 0; const f1 = x => (x < 10 ? x.toFixed(1) : Math.round(x).toLocaleString('en-US'));
     let html = `<p>Google Ads reported <b class="hl">${fN(S.conv)}</b> conversions while the site recorded <b class="hl">${fN(po)}</b> Paid Search orders${po ? ` (${Math.round(S.conv / po)}×)` : ''}.`;
@@ -2996,7 +2996,10 @@ async function askBrain(q) {
       const loc = askLocal(q);
       // Open-ended asks (explain to the CFO, should we..., write/draft) always go to the AI
       const OPEN = /\b(explain( to| it| this| why| in)?|cfo|ceo|board|write|draft|email|pitch|convince|should (we|i)|would you|what would|what if|how (can|do|should) we|advise|strategy|plan for|in \d+ (lines|sentences|bullets|words))\b/i;
-      if (loc.confident && !OPEN.test(q)) {
+      // Fast path only for clearly structured questions; anything else is planned by the AI
+      const STRUCT = /^\s*(top|bottom|total|sum|average|avg|mean|median|count|how many|how much|show|list|trend|compare|forecast|what (is|was|are|were) the|what's the|(which|what) \w+( \w+)? (has|had|have|is|was|are|were|made|drove|brought|got) the (highest|lowest|most|least|best|worst|biggest|smallest))\b|\bby (day|week|month|date|\w+)\b|\bper \w+|\b(vs|versus)\b/i;
+      const WHY = /\b(why|lying|lie|lies|trust|wrong|fake|cause|reason|problem|issue|broken|real|honest)\b/i;
+      if (loc.confident && !OPEN.test(q) && (loc.kind !== 'result' || (STRUCT.test(q) && !WHY.test(q)))) {
         // Fast path: the built-in engine understood the question, so show the numbers now
         // and let the AI add a short summary on top when it arrives.
         loc.engine = 'local';
