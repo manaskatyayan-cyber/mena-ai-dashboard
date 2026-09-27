@@ -723,6 +723,20 @@
    fbConfig: your Firebase web config object (safe to publish; protect with App Check)
    ============================================================ */
 window.MCI_AI_DEFAULTS = {
+  engine: 'firebase',
+  fbConfig: {
+    apiKey: "AIza...your value...",
+    authDomain: "samsung-mena-dc7a4.firebaseapp.com",
+    projectId: "samsung-mena-dc7a4",
+    storageBucket: "...your value...",
+    messagingSenderId: "...your value...",
+    appId: "...your value..."
+  },
+  fbModel: 'gemini-3.8-flash',
+  ...
+  memCloud: true,
+  appCheckKey: '',
+  /*window.MCI_AI_DEFAULTS = {
   engine: 'local',
   fbConfig: null,           // e.g. { apiKey: "...", authDomain: "...", projectId: "...", appId: "..." }
   fbModel: 'gemini-3.8-flash',
@@ -731,7 +745,7 @@ window.MCI_AI_DEFAULTS = {
   appCheckKey: '',         // reCAPTCHA Enterprise site key for Firebase App Check (recommended before sharing)
   anthropicModel: 'claude-sonnet-5',
   geminiModel: 'gemini-3.8-flash'
-};
+};*/
 </script>
 <script>
 /* ============================================================
