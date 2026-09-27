@@ -2801,10 +2801,12 @@ async function llmCall(system, user, json) {
     for (const m of models) {
       for (let attempt = 0; attempt < 2; attempt++) {
         try {
-          const model = AI.fb.aiMod.getGenerativeModel(AI.fb.ai, { model: m, systemInstruction: system, generationConfig: { temperature: 0.2, ...(json ? { responseMimeType: 'application/json' } : {}) } });
+          const gc = { temperature: 0.2, ...(json ? { responseMimeType: 'application/json' } : {}) }; if (!AI.noThinkCfg) gc.thinkingConfig = { thinkingLevel: (AI.fb.aiMod.ThinkingLevel && AI.fb.aiMod.ThinkingLevel.LOW) || 'LOW' };
+          const model = AI.fb.aiMod.getGenerativeModel(AI.fb.ai, { model: m, systemInstruction: system, generationConfig: gc });
           const res = await model.generateContent(user); AI.lastModel = m; return res.response.text();
         } catch (e) {
-          lastErr = e; if (!isBusyErr(e)) throw e;
+          lastErr = e; if (!AI.noThinkCfg && /thinking/i.test(String(e && e.message))) { AI.noThinkCfg = true; attempt--; continue; }
+          if (!isBusyErr(e)) throw e;
           if (attempt === 0) await new Promise(r => setTimeout(r, 1500));
         }
       }
@@ -2833,6 +2835,18 @@ function caseFacts() {
 Case topics available (return in "case_topics"): "roas", "funnel", "tracking", "worked", "recs", "anomalies", "simulator".`;
 }
 const CASE_TOPIC_Q = { roas: 'why is paid media roas low', funnel: 'where does the checkout funnel leak', tracking: 'what is wrong with conversion tracking', worked: 'what worked and what didnt', recs: 'what are the recommendations', anomalies: 'show anomaly alerts', simulator: 'simulator guest checkout recovery' };
+async function narrateLLM(q, results, caseBlocks, short) {
+  const strip = h => String(h || '').replace(/<[^>]+>/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/\s+/g, ' ').trim();
+  const evidence = [
+    ...results.map(({ T, r }) => ({ table: T.name, title: r.title, findings: strip(r.text.join(' ')), error: r.error, table_rows: r.table ? { columns: r.table.cols, rows: r.table.rows.slice(0, 15) } : null, notes: r.notes })),
+    ...caseBlocks.map(b => ({ title: b.title, findings: strip(b.html).slice(0, 1800), table_rows: b.table ? { columns: b.table.cols, rows: b.table.rows.slice(0, 12) } : null }))
+  ];
+  const A = UNI.tables[UNI.active]._A || (UNI.tables[UNI.active]._A = ENG.autoInsights(UNI.tables[UNI.active]));
+  const narrator = `You are a senior marketing & commercial data analyst answering an executive. Use ONLY numbers that appear in EVIDENCE - never invent or recompute figures. Answer the question directly in the first sentence, then give 2-5 short bullet points with the key numbers in **bold**, then one line starting "Next step:" with a concrete action. If the evidence cannot answer the question, say exactly what is missing and suggest a question the data can answer. Plain markdown, max 170 words. Use plain, simple words and short sentences. Never use the long dash character; use a plain hyphen (-) instead.${short ? ' The reader already sees the full table and chart, so keep this very short: under 80 words - one direct sentence, at most 2 bullets, then the Next step line.' : ''}`;
+  const narrUser = `QUESTION: ${q}\n\nEVIDENCE (computed by the local engine from the uploaded data):\n${JSON.stringify(evidence).slice(0, 14000)}\n\nOTHER AUTO-INSIGHTS: ${A.insights.slice(0, 5).map(i => i.title).join(' | ')}`;
+  const answer = await llmCall(narrator, narrUser, false);
+  return { md: answer, sentChars: narrator.length + narrUser.length + answer.length };
+}
 async function askLLM(q) {
   const tables = [UNI.tables[UNI.active], ...UNI.tables.filter((_, i) => i !== UNI.active)].slice(0, 5);
   const schema = tables.map(T => ENG.schemaText(T)).join('\n\n');
@@ -2848,30 +2862,22 @@ Use exact column names and category values from the schema. Prefer 1 spec; use 2
   (plan.specs || []).slice(0, 3).forEach(sp => { const T = UNI.tables.find(t => t.name === sp.table) || UNI.tables[UNI.active]; const { table, ...spec } = sp; if (spec.filters && !Array.isArray(spec.filters)) delete spec.filters; results.push({ T, r: ENG.execute(T, spec) }); });
   (plan.case_topics || []).slice(0, 3).forEach(k => { const a = CASE_TOPIC_Q[k] && caseIntent(CASE_TOPIC_Q[k]); if (a) caseBlocks.push(a); });
   if (!results.length && !caseBlocks.length) { const loc = askLocal(q); if (loc.results) loc.results.forEach(x => results.push(x)); else caseBlocks.push(loc); }
-  const strip = h => String(h || '').replace(/<[^>]+>/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/\s+/g, ' ').trim();
-  const evidence = [
-    ...results.map(({ T, r }) => ({ table: T.name, title: r.title, findings: strip(r.text.join(' ')), error: r.error, table_rows: r.table ? { columns: r.table.cols, rows: r.table.rows.slice(0, 15) } : null, notes: r.notes })),
-    ...caseBlocks.map(b => ({ title: b.title, findings: strip(b.html).slice(0, 1800), table_rows: b.table ? { columns: b.table.cols, rows: b.table.rows.slice(0, 12) } : null }))
-  ];
-  const A = UNI.tables[UNI.active]._A || (UNI.tables[UNI.active]._A = ENG.autoInsights(UNI.tables[UNI.active]));
-  const narrator = `You are a senior marketing & commercial data analyst answering an executive. Use ONLY numbers that appear in EVIDENCE - never invent or recompute figures. Answer the question directly in the first sentence, then give 2-5 short bullet points with the key numbers in **bold**, then one line starting "Next step:" with a concrete action. If the evidence cannot answer the question, say exactly what is missing and suggest a question the data can answer. Plain markdown, max 170 words. Use plain, simple words and short sentences. Never use the long dash character; use a plain hyphen (-) instead.`;
-  const narrUser = `QUESTION: ${q}\n\nEVIDENCE (computed by the local engine from the uploaded data):\n${JSON.stringify(evidence).slice(0, 14000)}\n\nOTHER AUTO-INSIGHTS: ${A.insights.slice(0, 5).map(i => i.title).join(' | ')}`;
-  const answer = await llmCall(narrator, narrUser, false);
-  const sentChars = planner.length + planUser.length + planTxt.length + narrator.length + narrUser.length + answer.length;
-  return { kind: 'llm', md: answer, results, caseBlocks, plan, sentChars, ms: Math.round(performance.now() - t0) };
+  const nar = await narrateLLM(q, results, caseBlocks);
+  const sentChars = planner.length + planUser.length + planTxt.length + nar.sentChars;
+  return { kind: 'llm', md: nar.md, results, caseBlocks, plan, sentChars, ms: Math.round(performance.now() - t0) };
 }
 
 /* ---------------- local answering ---------------- */
 function askLocal(q) {
-  const ca = caseIntent(q); if (ca) return { kind: 'case', ...ca };
+  const ca = caseIntent(q); if (ca) return { kind: 'case', ...ca, confident: true };
   if (!UNI.tables.length) return { kind: 'case', title: 'No data loaded', html: '<p>Load a file first.</p>' };
   const { T, spec, interp, matched } = parseQuestion(q);
   if (spec.op === 'summary') { const a = { kind: 'case', ...summaryAnswer(T), interp }; if (!matched && !/summar|overview|insight|finding|highlight|happen|worked|analy/i.test(q)) a.note = `I couldn't map that to columns in "${T.name}" - here is an overview instead. Tip: mention a column (e.g. ${[T.model.primary, T.model.bestDims[0]].filter(Boolean).join(', ')}) or connect Claude/Gemini in AI settings for free-form questions.`; return a; }
-  if (spec.op === 'quality') return { kind: 'case', ...qualityAnswer(T), interp };
-  if (spec.op === 'recommend') return { kind: 'case', ...recAnswer(T), interp };
+  if (spec.op === 'quality') return { kind: 'case', ...qualityAnswer(T), interp, confident: true };
+  if (spec.op === 'recommend') return { kind: 'case', ...recAnswer(T), interp, confident: true };
   if (spec.op === 'help') return { kind: 'case', ...helpAnswer(T), interp };
   const r = ENG.execute(T, spec);
-  return { kind: 'result', results: [{ T, r }], interp, followups: followupsFor(T, spec, r) };
+  return { kind: 'result', results: [{ T, r }], interp, followups: followupsFor(T, spec, r), confident: matched >= 1 && !r.error };
 }
 
 /* ---------------- chat UI ---------------- */
@@ -2949,6 +2955,30 @@ function chatPush(role, payload) {
   log.scrollTop = log.scrollHeight;
   return wrap;
 }
+function withTimeout(p, ms) { return Promise.race([p, new Promise((_, rej) => setTimeout(() => { const e = new Error('timeout'); e.timeout = true; rej(e); }, ms))]); }
+async function aiSummarise(card, q, loc, eng) {
+  const box = card.querySelector('.answer-card'); if (!box) return;
+  const head = box.firstElementChild;
+  const slot = document.createElement('div');
+  slot.className = 'ai-summary mb-3 text-[11.5px] text-purple-300 flex items-center gap-2';
+  slot.innerHTML = '<span class="brain-dot"></span><span class="brain-dot" style="animation-delay:.15s"></span><span class="brain-dot" style="animation-delay:.3s"></span><span>' + esc(ENGINE_NAME[eng]) + ' is adding a short summary - the numbers below are final.</span>';
+  head.insertAdjacentElement('afterend', slot);
+  const t0 = performance.now();
+  try {
+    const results = loc.kind === 'result' ? loc.results : [];
+    const blocks = loc.kind === 'result' ? [] : [{ title: loc.title, html: loc.html, table: loc.table }];
+    const nar = await withTimeout(narrateLLM(q, results, blocks, true), 15000);
+    slot.className = 'ai-summary mb-3 p-3 rounded-xl bg-purple-950/25 border border-purple-500/25 text-[13px] leading-relaxed text-slate-200 space-y-2 llm-md';
+    slot.innerHTML = md2html(nar.md);
+    const badge = head.firstElementChild; if (badge) badge.textContent = '✦ ' + ENGINE_NAME[eng] + ' + built-in engine';
+    const tokChip = [...head.querySelectorAll('span')].find(s => s.textContent.includes('⛁'));
+    if (tokChip) tokChip.textContent = '⛁ ~' + tokShort(Math.round(nar.sentChars / 4)) + ' tokens sent · ' + Math.round((performance.now() - t0) / 100) / 10 + ' s';
+  } catch (e) {
+    console.warn(e);
+    slot.className = 'ai-summary mb-2 text-[11px] text-slate-500';
+    slot.textContent = ENGINE_NAME[eng] + (e && e.timeout ? ' took too long' : e && e.busy ? ' is busy right now' : ' could not add a summary') + ' - the answer below is complete without it.';
+  }
+}
 let brainBusy = false;
 async function askBrain(q) {
   q = String(q || '').trim(); if (!q || brainBusy) return;
@@ -2957,15 +2987,31 @@ async function askBrain(q) {
   chatPush('user', q);
   const eng = AI.cfg.engine;
   const typing = chatPush('typing', eng === 'local' ? 'Parsing question and computing…' : `Planning with ${ENGINE_NAME[eng]}, computing locally…`);
-  await new Promise(r => setTimeout(r, 250));
+  await new Promise(r => setTimeout(r, 60));
   let ans;
   try {
     const pre = (typeof memIntent === 'function' && memIntent(q)) || (typeof useCaseIntent === 'function' && await useCaseIntent(q));
     if (pre) { ans = { kind: 'case', ...pre }; ans.engine = /Gemini|Claude/.test(pre.html || '') && eng !== 'local' ? eng : 'local'; }
-    else if (eng !== 'local') { ans = await askLLM(q); ans.engine = eng; }
+    else if (eng !== 'local') {
+      const loc = askLocal(q);
+      // Open-ended asks (explain to the CFO, should we..., write/draft) always go to the AI
+      const OPEN = /\b(explain( to| it| this| why| in)?|cfo|ceo|board|write|draft|email|pitch|convince|should (we|i)|would you|what would|what if|how (can|do|should) we|advise|strategy|plan for|in \d+ (lines|sentences|bullets|words))\b/i;
+      if (loc.confident && !OPEN.test(q)) {
+        // Fast path: the built-in engine understood the question, so show the numbers now
+        // and let the AI add a short summary on top when it arrives.
+        loc.engine = 'local';
+        try { const rt = rawTokens(); loc.tok = { sent: 0, full: rt.n, what: rt.what }; } catch (e) {}
+        typing.remove(); const card = chatPush('ai', loc); brainBusy = false;
+        try { memAddQuestion(q, loc.title || (loc.results && loc.results[0] && loc.results[0].r.title) || '', eng); } catch (e) {}
+        const cnt0 = document.getElementById('brainCount'); if (cnt0) cnt0.textContent = String((+cnt0.textContent || 0) + 1);
+        aiSummarise(card, q, loc, eng);
+        return;
+      }
+      ans = await withTimeout(askLLM(q), 25000); ans.engine = eng;
+    }
     else { ans = askLocal(q); ans.engine = 'local'; }
   } catch (e) {
-    console.warn(e); ans = askLocal(q); ans.engine = 'local'; ans.note = e && e.busy ? `${ENGINE_NAME[eng]} is busy right now (Google reports high demand on both models, tried 4 times) - answered with the built-in engine. Ask again in a minute.` : `${ENGINE_NAME[eng]} unavailable (${e.message}) - answered with the built-in engine.`;
+    console.warn(e); ans = askLocal(q); ans.engine = 'local'; ans.note = e && e.timeout ? `${ENGINE_NAME[eng]} took too long, so the built-in engine answered. Ask again for the AI version.` : e && e.busy ? `${ENGINE_NAME[eng]} is busy right now (Google reports high demand on both models, tried 4 times) - answered with the built-in engine. Ask again in a minute.` : `${ENGINE_NAME[eng]} unavailable (${e.message}) - answered with the built-in engine.`;
   }
   try { const rt = rawTokens(); ans.tok = { sent: Math.round((ans.sentChars || 0) / 4), full: rt.n, what: rt.what }; } catch (e) {}
   typing.remove(); chatPush('ai', ans); brainBusy = false;
