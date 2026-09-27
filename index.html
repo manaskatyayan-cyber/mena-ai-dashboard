@@ -1954,7 +1954,7 @@ const ENG = (() => {
     });
     const tm = cols.filter(c => c.role === 'time');
     const model = buildModel(cols);
-    return { name, headers, cols, rows: data, log, issues, model, rawRows: grid.length, ms: Date.now() - t0, dupes, dedupe: opts.dedupe !== false, hasTime: tm.length > 0 };
+    return { name, headers, cols, rows: data, log, issues, model, rawRows: grid.length, headerRows: h.row >= 0 ? h.row + 1 : 0, ms: Date.now() - t0, dupes, dedupe: opts.dedupe !== false, hasTime: tm.length > 0 };
   }
 
   function profile(c, rows) {
@@ -2646,7 +2646,7 @@ function tsCfgFromA(T, A) { const pts = A.ts.pts; return { type: pts.length > 40
 function qualityAnswer(T) {
   const warn = T.issues.filter(i => i[0] === 'warn').length;
   const tbl = { cols: ['Step', 'What the engine did'], rows: [...T.log.map(l => [l[0], l[1]]), ...T.issues.map(i => [i[0] === 'warn' ? 'warning' : 'note', i[1]])] };
-  return { title: `Data quality & cleaning - ${T.name}`, html: `<p>Quality score <b class="hl">${qualityScore(T)}/100</b>. ${T.rawRows ? `${ENG.num(T.rawRows)} raw rows → <b>${ENG.num(T.rows.length)}</b> clean rows, ` : ''}${T.cols.length} columns typed automatically, ${T.log.filter(l => ['clean', 'convert', 'reshape'].includes(l[0])).length} cleaning step(s), ${warn} warning(s). Full detail in the Data Engineering tab.</p>`, table: tbl, followups: ['Summarize this dataset', `Describe ${T.model.primary || T.cols[0].name}`] };
+  return { title: `Data quality & cleaning - ${T.name}`, html: `<p>Quality score <b class="hl">${qualityScore(T)}/100</b>. ${T.rawRows ? `${ENG.num(T.rawRows - (T.headerRows || 0))} data rows in the file → <b>${ENG.num(T.rows.length)}</b> clean rows, ` : ''}${T.cols.length} columns typed automatically, ${T.log.filter(l => ['clean', 'convert', 'reshape'].includes(l[0])).length} cleaning step(s), ${warn} warning(s). Full detail in the Data Engineering tab.</p>`, table: tbl, followups: ['Summarize this dataset', `Describe ${T.model.primary || T.cols[0].name}`] };
 }
 function recAnswer(T) {
   const A = T._A || (T._A = ENG.autoInsights(T)); const recs = ENG.recommendations(T, A);
@@ -2685,7 +2685,41 @@ function caseIntent(q) {
   if (UNI.mode !== 'case' || !VIEW) return null;
   const qn = normQ(q); const t = VIEW.tot; const scope = `<p class="text-[11px] text-slate-500 mt-2">Scope: ${esc(VIEW.opt.t)} · ${state.scope === 'ALL' ? 'All channels' : esc(GROUP_LABEL[state.scope])} (change with the filters above the case tabs).</p>`;
   const H = id => (document.getElementById(id) || {}).innerHTML || '';
-  const looseSpend = / (burn\w*|(bring|brought|bringing|give|gave|deliver\w*|make|made|earn\w*) (us )?back|worth it|(ad|ads|advertising|marketing) (spend|budget|money)|spen[dt] on (ads|advertising|media|marketing)) /.test(qn) && !/ (by|per|each|every) (day|daily|week|weekly|month|monthly|date|channel|campaign)|trend|over time/.test(qn);
+  const KPI_WORDS = [[/ (aov|average order value|basket size) /, 'aov'], [/ (conversion rate|cvr|conv rate) /, 'cvr'], [/ (revenue|sales) /, 'rev'], [/ (orders) /, 'orders'], [/ (spend|cost) /, 'spend'], [/ (roas|return on ad spend) /, 'roas'], [/ (cpa|cost per order|cost per acquisition) /, 'cpa'], [/ (mer) /, 'mer']];
+  const kHits = KPI_WORDS.filter(([re]) => re.test(qn)).map(x => x[1]);
+  if ((kHits.length >= 2 && !/ (by|per|each|trend|over time|why|drop|change) /.test(qn)) || / (kpis?|headline (numbers|metrics)|key (numbers|metrics)|overall numbers|the story in numbers) /.test(qn)) {
+    const cpaV = VIEW.mediaChOrders ? VIEW.spend / VIEW.mediaChOrders : 0;
+    const all = [['rev', 'Revenue (site)', fUSD(t.rev)], ['orders', 'Orders', fN(t.orders)], ['aov', 'Average order value (AOV)', fUSD(safe(t.rev, t.orders))], ['cvr', 'Conversion rate (orders ÷ shop page views)', pct(t.orders, t.shop, 2)], ['spend', 'Media spend (Search + Social)', fUSD(VIEW.spend)], ['roas', 'Paid ROAS (last-touch)', ratio(VIEW.mediaChRev, VIEW.spend)], ['cpa', 'Paid CPA (Search + Social)', cpaV ? fUSD(cpaV) : '-'], ['mer', 'MER (all revenue ÷ spend)', ratio(t.rev, VIEW.spend)]];
+    const pick = kHits.length >= 2 ? all.filter(r => kHits.includes(r[0])) : all;
+    return { title: 'Headline numbers', html: `<p>${pick.map(r => `${esc(r[1])}: <b class="hl">${r[2]}</b>`).join(' · ')}</p>${scope}`, table: { cols: ['Metric', 'Value'], rows: pick.map(r => [r[1], r[2]]) }, followups: ['Why is paid media ROAS so low?', 'Where does the checkout funnel leak?'] };
+  }
+  if (/ (competit\w*|rival\w*|conquest\w*) /.test(qn) && !/ (by (day|week|month|date)|trend|over time) /.test(qn)) {
+    const cs = VIEW.sCamps.filter(c => /^competition/i.test(c.name)); const cT = cs.reduce((a, c) => a + c.cost, 0); const sT = VIEW.searchTot.cost;
+    return { title: `Competitor search terms: ${fUSD(cT)}`, html: `<p><b class="hl">${fUSD(cT)}</b> of Google Ads spend (${pct(cT, sT, 0)} of ${fUSD(sT)}) went to the three competitor-term campaigns. These campaigns lose most of their impression share on ad rank, and Google Ads cannot tell us how many real orders they drove because its conversion counts are inflated (see the tracking audit).</p>${scope}`,
+      table: { cols: ['Campaign', 'Cost', 'Clicks', 'Platform conversions (inflated)'], rows: cs.map(c => [c.name, fUSD(c.cost), fN(c.clicks), fN(c.conv)]).concat([['Total', fUSD(cT), fN(cs.reduce((a, c) => a + c.clicks, 0)), fN(cs.reduce((a, c) => a + c.conv, 0))]]) },
+      followups: ['Top Campaign by Cost', 'What is wrong with conversion tracking?'] };
+  }
+  if (/ (spend|spent|spending|cost|costs|budget|ad money) /.test(qn) && !/ (per|roas|cpa|return|bring|brought|worth|burn\w*|efficien\w*) /.test(qn) && !/ (google|search|meta|facebook|social|campaigns?|keywords?|ad ?sets?|ad groups?|platform|competit\w*) /.test(qn)) {
+    // Media spend sits in two sheets (Google Ads and Meta); always add both
+    let lo = VIEW.lo, hi = VIEW.hi; let monLbl = '';
+    const mNames = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec']; const mm = qn.match(/ (jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]* /);
+    if (mm) { const mi = mNames.indexOf(mm[1]); const ds = []; for (let d = VIEW.lo; d <= VIEW.hi; d++) if (dayDate(d).getUTCMonth() === mi) ds.push(d); if (ds.length) { lo = ds[0]; hi = ds[ds.length - 1]; monLbl = ` in ${MON[mi]} ${dayDate(lo).getUTCFullYear()}`; } }
+    const g = / (day|daily) /.test(qn) ? 'day' : / (month|monthly) /.test(qn) ? 'month' : 'week';
+    const key = d => g === 'day' ? d : g === 'month' ? dayDate(d).getUTCMonth() + dayDate(d).getUTCFullYear() * 12 : d - ((dayDate(d).getUTCDay() + 6) % 7);
+    const lab = d => g === 'day' ? dLabel(d) : g === 'month' ? `${MON[dayDate(d).getUTCMonth()]} ${dayDate(d).getUTCFullYear()}` : `Wk of ${dLabel(d - ((dayDate(d).getUTCDay() + 6) % 7))}`;
+    const B = new Map();
+    const add = (d, i, v) => { if (d < lo || d > hi) return; const k = key(d); if (!B.has(k)) B.set(k, { d, v: [0, 0] }); const o = B.get(k); if (d < o.d) o.d = d; o.v[i] += v; };
+    DS.search.rows.forEach(r => add(r[0], 0, r[4])); DS.social.rows.forEach(r => add(r[0], 1, r[2]));
+    const bk = [...B.values()].sort((a, b) => a.d - b.d);
+    const S = bk.reduce((a, x) => a + x.v[0], 0), M = bk.reduce((a, x) => a + x.v[1], 0), T = S + M;
+    const peak = bk.reduce((m, x) => (x.v[0] + x.v[1] > m.v[0] + m.v[1] ? x : m), bk[0] || { d: lo, v: [0, 0] });
+    const byTime = / (by|per|each|trend|over time|weekly|daily|monthly) /.test(qn);
+    return { title: `Media spend${monLbl}: ${fUSD(T)}`, html: `<p>Total media spend${monLbl} was <b class="hl">${fUSD(T)}</b>: Google Ads (Paid Search) <b>${fUSD(S)}</b> (${pct(S, T, 0)}) and Meta (Social) <b>${fUSD(M)}</b> (${pct(M, T, 0)}). Highest ${g}: ${lab(peak.d)} (${fUSD(peak.v[0] + peak.v[1])}). No Display or Affiliate cost was provided in the data.${g === 'week' ? ' Weeks run Monday to Sunday, so the first and last weeks are partial.' : ''}</p>${scope}`,
+      chartCfg: { type: 'bar', labels: bk.map(x => lab(x.d)), datasets: [{ label: 'Google Ads', data: bk.map(x => Math.round(x.v[0])) }, { label: 'Meta', data: bk.map(x => Math.round(x.v[1])) }], fmt: 'num', stacked: true },
+      table: byTime ? { cols: [g[0].toUpperCase() + g.slice(1), 'Google Ads', 'Meta', 'Total'], rows: bk.map(x => [lab(x.d), fUSD(x.v[0]), fUSD(x.v[1]), fUSD(x.v[0] + x.v[1])]) } : { cols: ['Platform', 'Spend', 'Share'], rows: [['Google Ads (Paid Search)', fUSD(S), pct(S, T, 0)], ['Meta (Social)', fUSD(M), pct(M, T, 0)], ['Total', fUSD(T), '100%']] },
+      followups: ['Why is paid media ROAS so low?', 'Top Campaign by Cost'] };
+  }
+  const looseSpend = / (burn\w*|(bring|brought|bringing|give|gave|deliver\w*|make|made|earn\w*) (us )?back|worth it|(ad|ads|advertising|marketing) (spend|budget|money)|spen[dt] on (ads|advertising|media|marketing)) /.test(qn) && !/ (by|per|each|every) (day|daily|week|weekly|month|monthly|date|channel|campaign)|trend|over time/.test(qn) && !/ (google|meta|facebook|instagram|search|social) (ads? )?(spend|cost|budget) /.test(qn);
   if (looseSpend || / (roas|return on (ad )?spend|pay ?back|media (efficiency|performance|spend)|paid media|is (paid|advertising|media) working|cost per order|cpa|mer) /.test(qn)) {
     if (!VIEW.spend) return { title: 'Paid media ROAS', html: '<p>No media spend in the current scope. Set Channel scope to "All channels" or "Paid".</p>' };
     const cS = VIEW.ch[VIEW.iSearch], cSo = VIEW.ch[VIEW.iSocial]; const rows = [];
@@ -2694,20 +2728,24 @@ function caseIntent(q) {
     rows.push(['Search + Social', fUSD(VIEW.spend), fUSD(VIEW.mediaChRev), fN(VIEW.mediaChOrders), ratio(VIEW.mediaChRev, VIEW.spend), fUSD(safe(VIEW.spend, VIEW.mediaChOrders))]);
     return { title: `Paid media returns ${ratio(VIEW.mediaChRev, VIEW.spend)} on last-touch revenue`, html: `<p>Every $1 of Search + Social spend brought back <b class="hl">${fUSD(safe(VIEW.mediaChRev, VIEW.spend), 2)}</b> in last-touch site revenue (${fUSD(VIEW.spend)} spend → ${fUSD(VIEW.mediaChRev)}). Blended MER (all revenue ÷ spend) is ${ratio(t.rev, VIEW.spend)} - but that credits media with organic and CRM sales, so it is not ROAS.</p><p><b>Why it's low:</b> ${fUSD(VIEW.sCamps.filter(c => /compet/i.test(c.name)).reduce((a, c) => a + c.cost, 0))} went to competitor search terms that lose most impression share on ad rank; social drives ${pct(cSo ? cSo.m.shop : 0, t.shop, 0)} of shop traffic but converts at ${cSo ? pct(cSo.m.orders, cSo.m.shop) : '-'}; and platform conversion tracking is inflated, so bidding optimises to the wrong signal.</p>${scope}`, table: { cols: ['Platform', 'Spend', 'Site revenue', 'Site orders', 'ROAS', 'CPA'], rows }, chartCfg: { type: 'bar', labels: rows.map(r => r[0]), datasets: [{ label: 'ROAS (x)', data: rows.map(r => parseFloat(r[4])) }], fmt: 'x' }, followups: ['What is wrong with conversion tracking?', 'Top Campaign by Cost', 'What should we do next?'] };
   }
+  if (/ (simulat\w*|what if|recover|guest checkout|how much could) /.test(qn)) {
+    return { title: 'Checkout recovery sizing', html: `<p>With the current simulator settings: projected revenue <b class="hl">${esc(document.getElementById('simProjectedRev').textContent)}</b> ${esc(document.getElementById('simRevDelta').textContent)}, orders ${esc(document.getElementById('simProjectedOrders').textContent)} ${esc(document.getElementById('simOrdersDelta').textContent)}.</p><p>${esc(document.getElementById('simBreakdown').textContent)}</p><p class="text-slate-400">${esc(document.getElementById('simMethod').textContent)}</p><p>Move the sliders in the Insights tab to test other scenarios.</p>`, followups: ['Where does the checkout funnel leak?'] };
+  }
   if (/ (funnel|checkout|drop ?offs?|abandon\w*|leak\w*|bottleneck|login|guest|payment step) /.test(qn)) {
     const st = funnelSteps(t); const rows = st.map((s, i) => [`${i + 1}. ${s.name}`, fN(s.count), i ? pct(s.count, st[i - 1].count, 1) : '-', i ? fN(st[i - 1].count - s.count) : '-']);
     return { title: 'Where the checkout funnel leaks', html: H('funnelDiagnoses') + scope, table: { cols: ['Step', 'Count', '% of previous', 'Lost'], rows }, chartCfg: { type: 'bar', labels: st.map(s => s.name), datasets: [{ label: 'Count', data: st.map(s => s.count) }], fmt: 'num', log: true }, followups: ['How much could guest checkout recover?', 'Where is conversion rate lowest?', 'What should we do next?'] };
   }
-  if (/ (track\w*|attribution|discrepanc\w*|mismatch|over ?report\w*|over ?count\w*|over ?claim\w*|inflat\w*|pixel|conversion (issue|problem|results?|data|numbers?|counts?)|platform conversions?|google ads conversions?|q3) /.test(qn) || (/ (lying|lie|lies|liar|fake|wrong|trust\w*|believe|honest|real|accurate|correct|exaggerat\w*|double count\w*) /.test(qn) && / (conversions?|platforms?|google( ads)?|meta|facebook|ads?|reported|reporting|numbers?) /.test(qn))) {
+  if (!/ (by|per|each) (campaign|week|day|month|date|ad ?set) /.test(qn) && (/ (track\w*|attribution|discrepanc\w*|mismatch|over ?report\w*|over ?count\w*|over ?claim\w*|inflat\w*|pixel|conversion (issue|problem|results?|data|numbers?|counts?)|platform conversions?|google ads conversions?|q3) /.test(qn) || (/ (lying|lie|lies|liar|fake|wrong|trust\w*|believe|honest|real|accurate|correct|exaggerat\w*|double count\w*) /.test(qn) && / (conversions?|platforms?|google( ads)?|meta|facebook|ads?|reported|reporting|numbers?) /.test(qn)))) {
     const S = VIEW.searchTot, cS = VIEW.ch[VIEW.iSearch], B = (typeof BREAK !== 'undefined') ? BREAK : null;
     const po = cS ? cS.m.orders : 0; const f1 = x => (x < 10 ? x.toFixed(1) : Math.round(x).toLocaleString('en-US'));
     let html = `<p>Google Ads reported <b class="hl">${fN(S.conv)}</b> conversions while the site recorded <b class="hl">${fN(po)}</b> Paid Search orders${po ? ` (${Math.round(S.conv / po)}×)` : ''}.`;
     const rows = [];
     if (B && B.day !== null) {
-      html += ` The break came on <b class="hl">${dLabel(B.day)}</b>: daily conversions jumped from about ${f1(B.before.conv / B.before.days)} to ${f1(B.after.conv / B.after.days)} while real orders stayed flat, so the conversion action changed to a non-purchase event.`;
+      html += ` The break came on <b class="hl">${dLabel(B.day)}</b>: daily conversions jumped from about ${f1(B.before.conv / B.before.days)} to ${f1(B.after.conv / B.after.days)} while real Paid Search orders did not rise (about ${f1(B.before.ord / B.before.days)} a day before, ${f1(B.after.ord / B.after.days)} after), so the conversion action changed to a non-purchase event.`;
       rows.push([`Until ${dLabel(B.day - 1)}`, f1(B.before.conv / B.before.days), f1(B.before.ord / B.before.days), B.before.ord ? Math.round(B.before.conv / B.before.ord) + '×' : 'n/a']);
       rows.push([`From ${dLabel(B.day)}`, f1(B.after.conv / B.after.days), f1(B.after.ord / B.after.days), B.after.ord ? Math.round(B.after.conv / B.after.ord) + '×' : 'n/a']);
     }
+    const cSo2 = VIEW.ch[VIEW.iSocial]; if (cSo2 && VIEW.socialTot) html += ` Meta is much closer: ${fN(VIEW.socialTot.purch)} pixel purchases vs ${fN(cSo2.m.orders)} Social orders on the site (${pct(Math.abs(VIEW.socialTot.purch - cSo2.m.orders), cSo2.m.orders, 0)} ${VIEW.socialTot.purch < cSo2.m.orders ? 'below' : 'above'}), so the broken definition is in Google Ads.`;
     html += `</p><p class="mt-2"><b>Fix:</b> make a purchase with an order ID the only primary conversion, de-duplicate by order ID, and reconcile platform conversions with site orders every day.</p><p class="mt-2 text-slate-400">Chart, evidence and the full fix plan: ${go('tab-tracking')}</p>${scope}`;
     return { title: 'The conversion-tracking issue', html, table: rows.length ? { cols: ['Period', 'Google Ads conv. / day', 'Real orders / day', 'Over-count'], rows } : null, followups: ['How do we fix the tracking?', 'Why is paid media ROAS so low?'] };
   }
@@ -2736,9 +2774,6 @@ function caseIntent(q) {
   if (/ (recommend\w*|next steps?|what should|action plan|improve|q2|plan) /.test(qn)) {
     const titles = [...document.querySelectorAll('#q2Recs > div > div:first-child')].map(e => e.textContent.replace(/^\d+ · /, ''));
     return { title: 'Recommendations - in priority order', html: `<ol class="list-decimal pl-5 space-y-1">${titles.map(x => `<li>${esc(x)}</li>`).join('')}</ol><p class="mt-2"><b>First 30 days:</b> fix the conversion tracking, cap competitor search, launch a guest-checkout test.</p><p class="mt-2 text-slate-400">Each action with detail and the 30/60/90-day plan: ${go('tab-insights')}</p>`, followups: ['How much could guest checkout recover?', 'What is wrong with conversion tracking?'] };
-  }
-  if (/ (simulat\w*|what if|recover|guest checkout|how much could) /.test(qn)) {
-    return { title: 'Checkout recovery sizing', html: `<p>With the current simulator settings: projected revenue <b class="hl">${esc(document.getElementById('simProjectedRev').textContent)}</b> ${esc(document.getElementById('simRevDelta').textContent)}, orders ${esc(document.getElementById('simProjectedOrders').textContent)} ${esc(document.getElementById('simOrdersDelta').textContent)}.</p><p>${esc(document.getElementById('simBreakdown').textContent)}</p><p class="text-slate-400">${esc(document.getElementById('simMethod').textContent)}</p><p>Move the sliders in the Insights tab to test other scenarios.</p>`, followups: ['Where does the checkout funnel leak?'] };
   }
   if (/ (anomal\w*|alerts?|red flags?|risks?) /.test(qn) && !/ in [a-z]+ /.test(qn.replace(/ in (the )?data /, ' '))) {
     const L = buildAnomalies();
@@ -2842,7 +2877,7 @@ async function narrateLLM(q, results, caseBlocks, short) {
     ...caseBlocks.map(b => ({ title: b.title, findings: strip(b.html).slice(0, 1800), table_rows: b.table ? { columns: b.table.cols, rows: b.table.rows.slice(0, 12) } : null }))
   ];
   const A = UNI.tables[UNI.active]._A || (UNI.tables[UNI.active]._A = ENG.autoInsights(UNI.tables[UNI.active]));
-  const narrator = `You are a senior marketing & commercial data analyst answering an executive. Use ONLY numbers that appear in EVIDENCE - never invent or recompute figures. Answer the question directly in the first sentence, then give 2-5 short bullet points with the key numbers in **bold**, then one line starting "Next step:" with a concrete action. If the evidence cannot answer the question, say exactly what is missing and suggest a question the data can answer. Plain markdown, max 170 words. Use plain, simple words and short sentences. Never use the long dash character; use a plain hyphen (-) instead.${short ? ' The reader already sees the full table and chart, so keep this very short: under 80 words - one direct sentence, at most 2 bullets, then the Next step line.' : ''}`;
+  const narrator = `You are a senior marketing & commercial data analyst answering an executive. Use ONLY numbers that appear in EVIDENCE - never invent or recompute figures. Answer the question directly in the first sentence, then give 2-5 short bullet points with the key numbers in **bold**, then one line starting "Next step:" with a concrete action. If the evidence cannot answer the question, say exactly what is missing and suggest a question the data can answer. Plain markdown, max 170 words. Use plain, simple words and short sentences. Never use the long dash character; use a plain hyphen (-) instead. If the evidence covers only part of the question, answer that part and suggest asking the rest as its own question - never tell the reader to pull data from a database.${short ? ' The reader already sees the full table and chart, so keep this very short: under 80 words - one direct sentence, at most 2 bullets, then the Next step line.' : ''}`;
   const narrUser = `QUESTION: ${q}\n\nEVIDENCE (computed by the local engine from the uploaded data):\n${JSON.stringify(evidence).slice(0, 14000)}\n\nOTHER AUTO-INSIGHTS: ${A.insights.slice(0, 5).map(i => i.title).join(' | ')}`;
   const answer = await llmCall(narrator, narrUser, false);
   return { md: answer, sentChars: narrator.length + narrUser.length + answer.length };
@@ -2868,10 +2903,29 @@ Use exact column names and category values from the schema. Prefer 1 spec; use 2
 }
 
 /* ---------------- local answering ---------------- */
-function askLocal(q) {
-  const ca = caseIntent(q); if (ca) return { kind: 'case', ...ca, confident: true };
+// Everyday wording → the terms the parser knows
+function rewriteQ(q) {
+  return String(q)
+    .replace(/\b(revenue|sales) per order\b|\b(average )?basket (size|value)\b/gi, 'average order value')
+    .replace(/\b(best|top|highest)[- ]converting\b|\bconverts? (the )?(best|most|highest)\b/gi, 'highest conversion rate')
+    .replace(/\b(worst|lowest)[- ]converting\b|\bconverts? (the )?(worst|least|lowest)\b/gi, 'lowest conversion rate')
+    .replace(/\bsocial media\b(?! campaigns)/gi, 'social media campaigns')
+    .replace(/\bmobile app\b(?!lication)/gi, 'mobile application')
+    .replace(/\bspent\b/gi, 'spend');
+}
+function askLocal(q0) {
+  const ca = caseIntent(q0); if (ca) return { kind: 'case', ...ca, confident: true, curated: true };
   if (!UNI.tables.length) return { kind: 'case', title: 'No data loaded', html: '<p>Load a file first.</p>' };
-  const { T, spec, interp, matched } = parseQuestion(q);
+  const q = rewriteQ(q0);
+  // A named ad platform points at that platform's sheet
+  const qn0 = normQ(q); let force = null;
+  if (/ (meta|facebook|instagram) /.test(qn0)) force = UNI.tables.find(t => /meta|facebook|social data/i.test(t.name));
+  else if (/ (google ads|adwords) /.test(qn0)) force = UNI.tables.find(t => /google ads|search data/i.test(t.name));
+  const parsed = parseQuestion(q, force || undefined); const { T, spec, interp, matched } = parsed;
+  // "share of revenue from Organic" → the share of each group, not a breakdown inside Organic
+  if (/ (share|percentage|percent|proportion|% of) /.test(qn0) && spec.filters && spec.filters.length === 1 && spec.filters[0].op === 'eq' && ['agg', 'top', 'share'].includes(spec.op)) {
+    const fc = spec.filters[0].col; if (ENG.col(T, fc) && ENG.col(T, fc).role === 'dimension') { spec.op = 'share'; spec.dim = fc; delete spec.filters; spec._highlight = parsed.spec._highlight; }
+  }
   if (spec.op === 'summary') { const a = { kind: 'case', ...summaryAnswer(T), interp }; if (!matched && !/summar|overview|insight|finding|highlight|happen|worked|analy/i.test(q)) a.note = `I couldn't map that to columns in "${T.name}" - here is an overview instead. Tip: mention a column (e.g. ${[T.model.primary, T.model.bestDims[0]].filter(Boolean).join(', ')}) or connect Claude/Gemini in AI settings for free-form questions.`; return a; }
   if (spec.op === 'quality') return { kind: 'case', ...qualityAnswer(T), interp, confident: true };
   if (spec.op === 'recommend') return { kind: 'case', ...recAnswer(T), interp, confident: true };
@@ -2896,6 +2950,7 @@ function drawChart(canvas, cfg) {
       scales: cfg.horizontal ? { x: { ticks: { color: CHART_TXT, callback: tf }, grid: { color: CHART_GRID }, type: cfg.log ? 'logarithmic' : 'linear' }, y: { ticks: { color: CHART_TXT, font: { size: 10 }, callback: function (v) { const l = this.getLabelForValue(v); return String(l).length > 22 ? String(l).slice(0, 21) + '…' : l; } }, grid: { display: false } } }
         : { x: { ticks: { color: CHART_TXT, font: { size: 10 }, maxRotation: 45, autoSkip: true, callback: function (v) { const l = this.getLabelForValue(v); return String(l).length > 16 ? String(l).slice(0, 15) + '…' : l; } }, grid: { color: CHART_GRID } }, y: { type: cfg.log ? 'logarithmic' : 'linear', ticks: { color: CHART_TXT, callback: tf }, grid: { color: CHART_GRID }, beginAtZero: cfg.type === 'bar' }, ...(hasY2 ? { y2: { position: 'right', ticks: { color: PALETTE[1], callback: tickFmt(cfg.datasets.find(d => d.axis === 'y2').fmt || 'num') }, grid: { drawOnChartArea: false } } } : {}) } } });
   }
+  if (cfg.stacked && chart && chart.options.scales) { ['x', 'y'].forEach(k => { if (chart.options.scales[k]) chart.options.scales[k].stacked = true; }); chart.update(); }
   UNI.charts.push(chart); return chart;
 }
 function tableHTML(t, max = 20) {
@@ -2967,7 +3022,8 @@ async function aiSummarise(card, q, loc, eng) {
   try {
     const results = loc.kind === 'result' ? loc.results : [];
     const blocks = loc.kind === 'result' ? [] : [{ title: loc.title, html: loc.html, table: loc.table }];
-    const nar = await withTimeout(narrateLLM(q, results, blocks, true), 15000);
+    const slow = setTimeout(() => { const s = slot.querySelector('span:last-child'); if (s) s.textContent = ENGINE_NAME[eng] + ' is slower than usual right now - the numbers below are final.'; }, 12000);
+    let nar; try { nar = await withTimeout(narrateLLM(q, results, blocks, true), 45000); } finally { clearTimeout(slow); }
     slot.className = 'ai-summary mb-3 p-3 rounded-xl bg-purple-950/25 border border-purple-500/25 text-[13px] leading-relaxed text-slate-200 space-y-2 llm-md';
     slot.innerHTML = md2html(nar.md);
     const badge = head.firstElementChild; if (badge) badge.textContent = '✦ ' + ENGINE_NAME[eng] + ' + built-in engine';
@@ -2978,6 +3034,17 @@ async function aiSummarise(card, q, loc, eng) {
     slot.className = 'ai-summary mb-2 text-[11px] text-slate-500';
     slot.textContent = ENGINE_NAME[eng] + (e && e.timeout ? ' took too long' : e && e.busy ? ' is busy right now' : ' could not add a summary') + ' - the answer below is complete without it.';
   }
+}
+function fastRoute(q, loc) {
+  // Open-ended asks (explain to the CFO, should we..., write/draft) always go to the AI
+  const OPEN = /\b(explain( to| it| this| why| in)?|cfo|ceo|board|write|draft|(send|write|draft) (an |the |a )?(email|note|message)|pitch|convince|would you|what would|advise|strategy|plan for|in \d+ (lines|sentences|bullets|words))\b/i;
+  const SOFT = /\b(should (we|i)|what if|how (can|do|should) we)\b/i;
+  // Fast path only for clearly structured questions; anything else is planned by the AI
+  const STRUCT = /^\s*(top|bottom|total|sum|average|avg|mean|median|count|how many|how much|show|list|trend|compare|forecast|any (anomal\w*|outliers?|unusual|spikes?)|what (is|was|are|were)( the| our)?|what's( the)?|(which|what) (\w+ ){0,4}(has|had|have|is|was|are|were|made|drove|brought|got|spent|spend|cost|costs|converts?)( the)? (highest|lowest|most|least|best|worst|biggest|smallest))\b|\bby (day|week|month|date|\w+)\b|\bper \w+|\b(vs|versus)\b/i;
+  const WHY = /\b(why|lying|lie|lies|trust|wrong|fake|cause|reason|problem|issue|broken|real|honest)\b/i;
+  const r0 = loc.kind === 'result' && loc.results[0] ? loc.results[0].r : null; const isChange = !!(r0 && r0.spec && r0.spec.op === 'drivers');
+  const shortQ = q.trim().split(/\s+/).length <= 5;
+  return !!(loc.confident && !OPEN.test(q) && (loc.curated || loc.kind !== 'result' && !SOFT.test(q) || isChange || ((STRUCT.test(q) || shortQ) && !WHY.test(q) && !SOFT.test(q) && !/\band\b|&/i.test(q))));
 }
 let brainBusy = false;
 async function askBrain(q) {
@@ -2994,12 +3061,7 @@ async function askBrain(q) {
     if (pre) { ans = { kind: 'case', ...pre }; ans.engine = /Gemini|Claude/.test(pre.html || '') && eng !== 'local' ? eng : 'local'; }
     else if (eng !== 'local') {
       const loc = askLocal(q);
-      // Open-ended asks (explain to the CFO, should we..., write/draft) always go to the AI
-      const OPEN = /\b(explain( to| it| this| why| in)?|cfo|ceo|board|write|draft|email|pitch|convince|should (we|i)|would you|what would|what if|how (can|do|should) we|advise|strategy|plan for|in \d+ (lines|sentences|bullets|words))\b/i;
-      // Fast path only for clearly structured questions; anything else is planned by the AI
-      const STRUCT = /^\s*(top|bottom|total|sum|average|avg|mean|median|count|how many|how much|show|list|trend|compare|forecast|what (is|was|are|were) the|what's the|(which|what) \w+( \w+)? (has|had|have|is|was|are|were|made|drove|brought|got) the (highest|lowest|most|least|best|worst|biggest|smallest))\b|\bby (day|week|month|date|\w+)\b|\bper \w+|\b(vs|versus)\b/i;
-      const WHY = /\b(why|lying|lie|lies|trust|wrong|fake|cause|reason|problem|issue|broken|real|honest)\b/i;
-      if (loc.confident && !OPEN.test(q) && (loc.kind !== 'result' || (STRUCT.test(q) && !WHY.test(q)))) {
+      if (fastRoute(q, loc)) {
         // Fast path: the built-in engine understood the question, so show the numbers now
         // and let the AI add a short summary on top when it arrives.
         loc.engine = 'local';
