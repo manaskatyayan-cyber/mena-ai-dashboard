@@ -13,6 +13,7 @@
     body { font-family: 'Inter', sans-serif; background-color: #090d16; color: #f1f5f9; }
     .glass-card { background: rgba(17, 24, 39, 0.78); backdrop-filter: blur(12px); border: 1px solid rgba(255, 255, 255, 0.08); }
     .glass-card-subtle { background: rgba(23, 32, 51, 0.65); border: 1px solid rgba(255, 255, 255, 0.05); }
+    @media (max-width: 767px) { header.sticky { position: relative; } }
     .active-nav-tab { border-bottom: 2px solid #38bdf8; color: #38bdf8 !important; font-weight: 600; }
     .table-hover tr:hover, tr.table-hover:hover { background-color: rgba(51, 65, 85, 0.35); }
     input[type="file"] { display: none; }
@@ -136,7 +137,7 @@
   </section>
 
   <!-- NAV -->
-  <nav class="bg-slate-900 border-b border-slate-800 px-6 flex space-x-6 text-sm no-print overflow-x-auto custom-scroll whitespace-nowrap">
+  <nav id="tabNav" class="sticky z-30 bg-slate-900 border-b border-slate-800 shadow-lg shadow-slate-950/40 px-6 flex space-x-6 text-sm no-print overflow-x-auto custom-scroll whitespace-nowrap" style="position: sticky; top: var(--hdrH, 0px); z-index: 30;">
     <button class="nav-tab brain-tab py-3 px-1 flex items-center space-x-2 text-purple-200 font-semibold" data-tab="tab-brain"><i data-lucide="sparkles" class="w-4 h-4 text-purple-300"></i><span>AI Brain</span><span id="brainCount" class="hidden">0</span></button>
     <button class="nav-tab active-nav-tab py-3 px-1 flex items-center space-x-2 text-slate-400" data-tab="tab-overview"><i data-lucide="layout-dashboard" class="w-4 h-4"></i><span>1. Overview</span></button>
     <button class="nav-tab py-3 px-1 flex items-center space-x-2 text-slate-400 hover:text-slate-200" data-tab="tab-funnel"><i data-lucide="filter" class="w-4 h-4 text-sky-400"></i><span>2. Site Funnel</span></button>
@@ -735,36 +736,13 @@ window.MCI_AI_DEFAULTS = {
     measurementId: "G-THG237TFQ1"
   },
   fbModel: 'gemini-3.8-flash',
+  fbFallbackModel: 'gemini-3.5-flash-lite',   // used when the main model is busy
   fbVersion: '12.19.0',
-  memCloud: true,
-  appCheckKey: '',
+  memCloud: true,          // AI Brain memory kept in Firestore (collection mci_memory)
+  appCheckKey: '',         // add the reCAPTCHA Enterprise site key here when App Check is set up
   anthropicModel: 'claude-sonnet-5',
   geminiModel: 'gemini-3.8-flash'
 };
-  /*window.MCI_AI_DEFAULTS = {
-  engine: 'firebase',
-  fbConfig: {
-    apiKey: "AIza...your value...",
-    authDomain: "samsung-mena-dc7a4.firebaseapp.com",
-    projectId: "samsung-mena-dc7a4",
-    storageBucket: "...your value...",
-    messagingSenderId: "...your value...",
-    appId: "...your value..."
-  },
-  fbModel: 'gemini-3.8-flash',
-  ...
-  memCloud: true,
-  appCheckKey: '',*/
-  /*window.MCI_AI_DEFAULTS = {
-  engine: 'local',
-  fbConfig: null,           // e.g. { apiKey: "...", authDomain: "...", projectId: "...", appId: "..." }
-  fbModel: 'gemini-3.8-flash',
-  fbVersion: '12.19.0',
-  memCloud: false,         // true = keep AI Brain memory in Firestore (collection mci_memory)
-  appCheckKey: '',         // reCAPTCHA Enterprise site key for Firebase App Check (recommended before sharing)
-  anthropicModel: 'claude-sonnet-5',
-  geminiModel: 'gemini-3.8-flash'
-};*/
 </script>
 <script>
 /* ============================================================
@@ -1611,7 +1589,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
   document.getElementById('timeHorizonSelect').addEventListener('change', e => { state.horizon = e.target.value; render(); });
   document.getElementById('channelSelect').addEventListener('change', e => { state.scope = e.target.value; render(); });
-  document.querySelectorAll('.nav-tab').forEach(tab => tab.addEventListener('click', () => {
+  // Keep the tab bar fixed just under the top bar while scrolling
+  const hdr = document.querySelector('header'); const hdrFixed = () => hdr && getComputedStyle(hdr).position === 'sticky'; const setH = () => document.documentElement.style.setProperty('--hdrH', (hdrFixed() ? hdr.offsetHeight : 0) + 'px');
+    setH(); window.addEventListener('resize', setH); if (hdr && window.ResizeObserver) new ResizeObserver(setH).observe(hdr); 
+  document.querySelectorAll('.nav-tab').forEach(tab => tab.addEventListener('click', ev => {
+    if (ev && ev.isTrusted) { const nav = document.getElementById('tabNav'), main = document.querySelector('main'); if (nav && main) { const top = main.getBoundingClientRect().top + window.scrollY - nav.offsetHeight - (hdrFixed() ? hdr.offsetHeight : 0); if (window.scrollY > top) window.scrollTo({ top }); } }
     document.querySelectorAll('.nav-tab').forEach(t => t.classList.remove('active-nav-tab'));
     tab.classList.add('active-nav-tab');
     document.querySelectorAll('.tab-content').forEach(c => c.classList.toggle('hidden', c.id !== tab.dataset.tab));
@@ -2703,7 +2685,8 @@ function caseIntent(q) {
   if (UNI.mode !== 'case' || !VIEW) return null;
   const qn = normQ(q); const t = VIEW.tot; const scope = `<p class="text-[11px] text-slate-500 mt-2">Scope: ${esc(VIEW.opt.t)} · ${state.scope === 'ALL' ? 'All channels' : esc(GROUP_LABEL[state.scope])} (change with the filters above the case tabs).</p>`;
   const H = id => (document.getElementById(id) || {}).innerHTML || '';
-  if (/ (roas|return on (ad )?spend|pay ?back|media (efficiency|performance|spend)|paid media|is (paid|advertising|media) working|cost per order|cpa|mer) /.test(qn)) {
+  const looseSpend = / (burn\w*|(bring|brought|bringing|give|gave|deliver\w*|make|made|earn\w*) (us )?back|worth it|(ad|ads|advertising|marketing) (spend|budget|money)|spen[dt] on (ads|advertising|media|marketing)) /.test(qn) && !/ (by|per|each|every) (day|daily|week|weekly|month|monthly|date|channel|campaign)|trend|over time/.test(qn);
+  if (looseSpend || / (roas|return on (ad )?spend|pay ?back|media (efficiency|performance|spend)|paid media|is (paid|advertising|media) working|cost per order|cpa|mer) /.test(qn)) {
     if (!VIEW.spend) return { title: 'Paid media ROAS', html: '<p>No media spend in the current scope. Set Channel scope to "All channels" or "Paid".</p>' };
     const cS = VIEW.ch[VIEW.iSearch], cSo = VIEW.ch[VIEW.iSocial]; const rows = [];
     if (cS) rows.push(['Google Ads (Paid Search)', fUSD(VIEW.searchTot.cost), fUSD(cS.m.rev), fN(cS.m.orders), ratio(cS.m.rev, VIEW.searchTot.cost), cS.m.orders ? fUSD(VIEW.searchTot.cost / cS.m.orders) : '-']);
@@ -2769,7 +2752,7 @@ const AI = { cfg: null, fb: null };
 function ssGet(k) { try { return sessionStorage.getItem(k) || ''; } catch (e) { return ''; } }
 function ssSet(k, v) { try { v ? sessionStorage.setItem(k, v) : sessionStorage.removeItem(k); } catch (e) {} }
 function loadAICfg() {
-  const base = { engine: 'local', anthropicModel: 'claude-sonnet-5', geminiModel: 'gemini-3.8-flash', fbModel: 'gemini-3.8-flash', fbVersion: '12.19.0', fbConfig: '', ...(window.MCI_AI_DEFAULTS || {}) };
+  const base = { engine: 'local', anthropicModel: 'claude-sonnet-5', geminiModel: 'gemini-3.8-flash', fbModel: 'gemini-3.8-flash', fbFallbackModel: 'gemini-3.5-flash-lite', fbVersion: '12.19.0', fbConfig: '', ...(window.MCI_AI_DEFAULTS || {}) };
   if (base.fbConfig && typeof base.fbConfig === 'object') base.fbConfig = JSON.stringify(base.fbConfig);
   try { Object.assign(base, JSON.parse(localStorage.getItem('mci_ai_cfg') || '{}')); } catch (e) {}
   base.anthropicKey = ssGet('mci_ak'); base.geminiKey = ssGet('mci_gk');
@@ -2812,11 +2795,25 @@ async function llmCall(system, user, json) {
       const aiMod = await import(`https://www.gstatic.com/firebasejs/${c.fbVersion}/firebase-ai.js`);
       AI.fb = { aiMod, ai: aiMod.getAI(F.app, { backend: new aiMod.GoogleAIBackend() }) };
     }
-    const model = AI.fb.aiMod.getGenerativeModel(AI.fb.ai, { model: c.fbModel, systemInstruction: system, generationConfig: { temperature: 0.2, ...(json ? { responseMimeType: 'application/json' } : {}) } });
-    const res = await model.generateContent(user); return res.response.text();
+    // Busy servers (500/503/429 "high demand") are retried, then the lighter fallback model is tried.
+    const models = [c.fbModel, c.fbFallbackModel].filter((m, i, a) => m && a.indexOf(m) === i);
+    let lastErr = null;
+    for (const m of models) {
+      for (let attempt = 0; attempt < 2; attempt++) {
+        try {
+          const model = AI.fb.aiMod.getGenerativeModel(AI.fb.ai, { model: m, systemInstruction: system, generationConfig: { temperature: 0.2, ...(json ? { responseMimeType: 'application/json' } : {}) } });
+          const res = await model.generateContent(user); AI.lastModel = m; return res.response.text();
+        } catch (e) {
+          lastErr = e; if (!isBusyErr(e)) throw e;
+          if (attempt === 0) await new Promise(r => setTimeout(r, 1500));
+        }
+      }
+    }
+    lastErr.busy = true; throw lastErr;
   }
   throw new Error('No AI engine selected');
 }
+function isBusyErr(e) { return /\b(500|503|429)\b|high demand|overloaded|unavailable|resource.?exhausted|try again later|rate.?limit/i.test(String((e && e.message) || e)); }
 function parseFbConfig(v) {
   if (!v) return null; if (typeof v === 'object') return v;
   try { return JSON.parse(v); } catch (e) {}
@@ -2857,7 +2854,7 @@ Use exact column names and category values from the schema. Prefer 1 spec; use 2
     ...caseBlocks.map(b => ({ title: b.title, findings: strip(b.html).slice(0, 1800), table_rows: b.table ? { columns: b.table.cols, rows: b.table.rows.slice(0, 12) } : null }))
   ];
   const A = UNI.tables[UNI.active]._A || (UNI.tables[UNI.active]._A = ENG.autoInsights(UNI.tables[UNI.active]));
-  const narrator = `You are a senior marketing & commercial data analyst answering an executive. Use ONLY numbers that appear in EVIDENCE - never invent or recompute figures. Answer the question directly in the first sentence, then give 2-5 short bullet points with the key numbers in **bold**, then one line starting "Next step:" with a concrete action. If the evidence cannot answer the question, say exactly what is missing and suggest a question the data can answer. Plain markdown, max 170 words.`;
+  const narrator = `You are a senior marketing & commercial data analyst answering an executive. Use ONLY numbers that appear in EVIDENCE - never invent or recompute figures. Answer the question directly in the first sentence, then give 2-5 short bullet points with the key numbers in **bold**, then one line starting "Next step:" with a concrete action. If the evidence cannot answer the question, say exactly what is missing and suggest a question the data can answer. Plain markdown, max 170 words. Use plain, simple words and short sentences. Never use the long dash character; use a plain hyphen (-) instead.`;
   const narrUser = `QUESTION: ${q}\n\nEVIDENCE (computed by the local engine from the uploaded data):\n${JSON.stringify(evidence).slice(0, 14000)}\n\nOTHER AUTO-INSIGHTS: ${A.insights.slice(0, 5).map(i => i.title).join(' | ')}`;
   const answer = await llmCall(narrator, narrUser, false);
   const sentChars = planner.length + planUser.length + planTxt.length + narrator.length + narrUser.length + answer.length;
@@ -2879,7 +2876,7 @@ function askLocal(q) {
 
 /* ---------------- chat UI ---------------- */
 const PALETTE = ['#38bdf8', '#34d399', '#a78bfa', '#fbbf24', '#fb7185', '#22d3ee', '#f472b6', '#94a3b8'];
-function tickFmt(fmt) { return v => fmt === 'pct' ? (v * 100).toFixed(Math.abs(v) < 0.1 ? 1 : 0) + '%' : fmt === 'x' ? (+v).toFixed(1) + 'x' : ENG.short(+v); }
+function tickFmt(fmt) { return v => fmt === 'pct' ? (v * 100).toFixed(Math.abs(v) < 0.1 ? 1 : 0) + '%' : fmt === 'x' ? (+v).toFixed(Math.abs(v) >= 10 ? 0 : Math.abs(v) >= 1 ? 1 : 2) + 'x' : ENG.short(+v); }
 function drawChart(canvas, cfg) {
   if (!cfg || !window.Chart) return null;
   const fmt = cfg.fmt || 'num'; const tf = tickFmt(fmt);
@@ -2968,7 +2965,7 @@ async function askBrain(q) {
     else if (eng !== 'local') { ans = await askLLM(q); ans.engine = eng; }
     else { ans = askLocal(q); ans.engine = 'local'; }
   } catch (e) {
-    console.warn(e); ans = askLocal(q); ans.engine = 'local'; ans.note = `${ENGINE_NAME[eng]} unavailable (${e.message}) - answered with the built-in engine.`;
+    console.warn(e); ans = askLocal(q); ans.engine = 'local'; ans.note = e && e.busy ? `${ENGINE_NAME[eng]} is busy right now (Google reports high demand on both models, tried 4 times) - answered with the built-in engine. Ask again in a minute.` : `${ENGINE_NAME[eng]} unavailable (${e.message}) - answered with the built-in engine.`;
   }
   try { const rt = rawTokens(); ans.tok = { sent: Math.round((ans.sentChars || 0) / 4), full: rt.n, what: rt.what }; } catch (e) {}
   typing.remove(); chatPush('ai', ans); brainBusy = false;
@@ -3379,9 +3376,9 @@ function toolTrace(a) {
   const calls = [];
   if (a.kind === 'result') a.results.forEach(({ T, r }) => calls.push({ tool: 'query_table', args: { table: T.name, ...r.spec }, sql: specToSQL(T, r.spec) }));
   else if (a.kind === 'llm') {
-    calls.push({ tool: 'plan_query', args: { model: ENGINE_NAME[a.engine] || a.engine, sends: 'question + column names only' } });
+    calls.push({ tool: 'plan_query', args: { model: (ENGINE_NAME[a.engine] || a.engine) + (a.engine === 'firebase' && AI.lastModel ? ` (${AI.lastModel})` : ''), sends: 'question + column names only' } });
     a.results.forEach(({ T, r }) => calls.push({ tool: 'query_table', args: { table: T.name, ...r.spec }, sql: specToSQL(T, r.spec) }));
-    calls.push({ tool: 'write_answer', args: { model: ENGINE_NAME[a.engine] || a.engine, sends: 'computed results only' } });
+    calls.push({ tool: 'write_answer', args: { model: (ENGINE_NAME[a.engine] || a.engine) + (a.engine === 'firebase' && AI.lastModel ? ` (${AI.lastModel})` : ''), sends: 'computed results only' } });
   } else (a.tools || [{ tool: 'case_view', args: { topic: a.title || 'case answer' } }]).forEach(t => calls.push(t));
   return calls;
 }
@@ -3907,14 +3904,14 @@ function renderConn() {
     anchor.insertAdjacentElement('afterend', el);
   }
   const eng = connEngine(); const name = ENGINE_NAME[eng] || eng;
-  const a = eng === 'local' ? { c: 'slate', t: 'Built-in engine (offline, no AI key)' } : CONN.ai.s === 'ok' ? { c: 'emerald', t: `${name}: connected` } : CONN.ai.s === 'err' ? { c: 'rose', t: `${name}: not connected` } : { c: 'amber', t: `${name}: checking…` };
+  const a = eng === 'local' ? { c: 'slate', t: 'Built-in engine (offline, no AI key)' } : CONN.ai.s === 'ok' ? { c: 'emerald', t: `${name}: connected` } : CONN.ai.s === 'busy' ? { c: 'amber', t: `${name}: connected, model busy` } : CONN.ai.s === 'err' ? { c: 'rose', t: `${name}: not connected` } : { c: 'amber', t: `${name}: checking…` };
   const memTxt = MEM.backend === 'firestore' ? 'Memory: Firestore ✓' : (AI.cfg && AI.cfg.memCloud) ? (MEM.cloudErr ? 'Memory: Firestore ✗' : 'Memory: connecting…') : 'Memory: this browser';
   const memC = MEM.backend === 'firestore' ? 'text-emerald-300' : (AI.cfg && AI.cfg.memCloud && MEM.cloudErr) ? 'text-rose-300' : 'text-slate-400';
   const dot = { slate: 'bg-slate-400', emerald: 'bg-emerald-400', rose: 'bg-rose-400', amber: 'bg-amber-400' }[a.c];
   el.className = 'inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-slate-900/80 border border-slate-700 text-[11px] font-semibold hover:border-slate-500';
   el.title = [CONN.ai.msg ? `AI: ${CONN.ai.msg}` : '', MEM.cloudErr ? `Memory: ${MEM.cloudErr}` : '', FB && FB.appCheck ? 'App Check: on' : (eng === 'firebase' ? 'App Check: not set' : ''), 'Click to open AI settings'].filter(Boolean).join('\n');
   el.innerHTML = `<span class="w-2 h-2 rounded-full ${dot} ${a.c === 'amber' ? 'animate-pulse' : ''}"></span><span class="text-${a.c}-300">${esc(a.t)}</span><span class="text-slate-600">|</span><span class="${memC}">${memTxt}</span>${eng === 'firebase' && CONN.ai.s === 'ok' ? `<span class="text-slate-600">|</span><span class="${FB && FB.appCheck ? 'text-emerald-300' : 'text-amber-300'}">App Check ${FB && FB.appCheck ? 'on' : 'off'}</span>` : ''}`;
-  const b = document.getElementById('engineBadge'); if (b && eng !== 'local') b.textContent = `✦ ${name} ${CONN.ai.s === 'ok' ? '✓' : CONN.ai.s === 'err' ? '✗' : '…'}`;
+  const b = document.getElementById('engineBadge'); if (b && eng !== 'local') b.textContent = `✦ ${name} ${CONN.ai.s === 'ok' ? '✓' : CONN.ai.s === 'busy' ? '(busy)' : CONN.ai.s === 'err' ? '✗' : '…'}`;
 }
 async function connCheck() {
   if (connEngine() === 'local') { setAIStatus('off'); return; }
@@ -3925,8 +3922,8 @@ async function connCheck() {
 {
   const _llm = llmCall;
   llmCall = async function (...args) {
-    try { const r = await _llm(...args); if (connEngine() !== 'local') setAIStatus('ok'); return r; }
-    catch (e) { if (connEngine() !== 'local') setAIStatus('err', e.message); throw e; }
+    try { let r = await _llm(...args); if (typeof r === 'string') r = r.replace(/\s*[\u2014\u2013]\s*/g, ' - '); if (connEngine() !== 'local') setAIStatus('ok'); return r; }
+    catch (e) { if (connEngine() !== 'local') setAIStatus(e && e.busy ? 'busy' : 'err', e.message); throw e; }
   };
   const _save = saveAISettings; saveAISettings = function () { _save(); connCheck(); };
   const _read = readAIForm; readAIForm = function () { const o = _read(); const k = document.getElementById('aiAppCheck'); if (k) o.appCheckKey = k.value.trim(); return o; };
